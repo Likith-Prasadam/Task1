@@ -20,6 +20,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Flake8
@@ -51,38 +52,56 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+
+            echo "Saving current running image as backup..."
+
+            CURRENT_IMAGE=$(sudo docker inspect flask-app --format='{{.Config.Image}}' 2>/dev/null || true)
+
+            if [ ! -z "$CURRENT_IMAGE" ]; then
+              sudo docker tag $CURRENT_IMAGE backup-image
+            fi
+
+            echo "Pulling latest image..."
+
             sudo docker pull ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
 
-            sudo docker tag \
-            ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest \
-            backup-image || true
+            echo "Stopping old container..."
 
             sudo docker stop flask-app || true
             sudo docker rm flask-app || true
+
+            echo "Starting new container..."
 
             sudo docker run -d \
               --name flask-app \
               -p 5000:5000 \
               ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
 
+            echo "Waiting for application..."
+
             sleep 15
 
             RESPONSE=$(curl -s http://localhost:5000)
 
+            echo "Application Response: $RESPONSE"
+
             if [[ "$RESPONSE" != *"Application Healthy"* ]]
             then
 
-                echo "Health Check Failed"
+              echo "Health Check Failed"
+              echo "Starting Rollback..."
 
-                sudo docker stop flask-app
-                sudo docker rm flask-app
+              sudo docker stop flask-app || true
+              sudo docker rm flask-app || true
 
-                sudo docker run -d \
-                  --name flask-app \
-                  -p 5000:5000 \
-                  backup-image
+              sudo docker run -d \
+                --name flask-app \
+                -p 5000:5000 \
+                backup-image
 
-                exit 1
+              echo "Rollback Completed"
+
+              exit 1
 
             fi
 
@@ -96,4 +115,4 @@ jobs:
       - name: Deployment Failed
         if: failure()
         run: |
-          echo "Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment Failed - Rollback Executed" >> $GITHUB_STEP_SUMMARY
