@@ -51,8 +51,11 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-          
             sudo docker pull ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
+
+            sudo docker tag \
+            ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest \
+            backup-image || true
 
             sudo docker stop flask-app || true
             sudo docker rm flask-app || true
@@ -64,4 +67,33 @@ jobs:
 
             sleep 15
 
-            curl http://localhost:5000
+            RESPONSE=$(curl -s http://localhost:5000)
+
+            if [[ "$RESPONSE" != *"Application Healthy"* ]]
+            then
+
+                echo "Health Check Failed"
+
+                sudo docker stop flask-app
+                sudo docker rm flask-app
+
+                sudo docker run -d \
+                  --name flask-app \
+                  -p 5000:5000 \
+                  backup-image
+
+                exit 1
+
+            fi
+
+            echo "Health Check Passed"
+
+      - name: Deployment Success
+        if: success()
+        run: |
+          echo "Deployment Successful" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deployment Failed
+        if: failure()
+        run: |
+          echo "Deployment Failed" >> $GITHUB_STEP_SUMMARY
