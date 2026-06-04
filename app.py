@@ -5,7 +5,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Application Healthy Version 2"
+    return "Application Healthy Version 3"
 
 
 if __name__ == "__main__":
