@@ -6,8 +6,11 @@ on:
       - master
 
 jobs:
-  build-test-push:
+  build-test-deploy:
     runs-on: ubuntu-latest
+
+    env:
+      IMAGE_TAG: v${{ github.run_number }}
 
     steps:
       - name: Checkout Code
@@ -20,7 +23,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Flake8
@@ -31,7 +33,7 @@ jobs:
         run: |
           pytest -v
 
-      - name: Login To DockerHub
+      - name: Docker Login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -39,11 +41,13 @@ jobs:
 
       - name: Build Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest .
+          docker build \
+            -t ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:${IMAGE_TAG} .
 
       - name: Push Image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
+          docker push \
+            ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:${IMAGE_TAG}
 
       - name: Deploy To EC2
         uses: appleboy/ssh-action@v1.0.3
@@ -53,66 +57,58 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
 
-            echo "Saving current running image as backup..."
+            NEW_VERSION="v${{ github.run_number }}"
+            OLD_VERSION="${{ secrets.PREVIOUS_IMAGE_TAG }}"
 
-            CURRENT_IMAGE=$(sudo docker inspect flask-app --format='{{.Config.Image}}' 2>/dev/null || true)
+            echo "Deploying $NEW_VERSION"
+            echo "Rollback target $OLD_VERSION"
 
-            if [ ! -z "$CURRENT_IMAGE" ]; then
-              sudo docker tag $CURRENT_IMAGE backup-image
-            fi
-
-            echo "Pulling latest image..."
-
-            sudo docker pull ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
-
-            echo "Stopping old container..."
+            sudo docker pull \
+            ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:$NEW_VERSION
 
             sudo docker stop flask-app || true
             sudo docker rm flask-app || true
 
-            echo "Starting new container..."
-
             sudo docker run -d \
               --name flask-app \
               -p 5000:5000 \
-              ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:latest
-
-            echo "Waiting for application..."
+              ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:$NEW_VERSION
 
             sleep 15
 
             RESPONSE=$(curl -s http://localhost:5000)
 
-            echo "Application Response: $RESPONSE"
+            echo "Response: $RESPONSE"
 
             if [[ "$RESPONSE" != *"Application Healthy"* ]]
             then
 
               echo "Health Check Failed"
-              echo "Starting Rollback..."
+              echo "Rolling back..."
 
               sudo docker stop flask-app || true
               sudo docker rm flask-app || true
 
+              sudo docker pull \
+              ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:$OLD_VERSION
+
               sudo docker run -d \
                 --name flask-app \
                 -p 5000:5000 \
-                backup-image
-
-              echo "Rollback Completed"
+                ${{ secrets.DOCKER_USERNAME }}/task1-flask-app:$OLD_VERSION
 
               exit 1
 
             fi
 
-            echo "Health Check Passed"
+            echo "Deployment Successful"
 
-      - name: Deployment Success
+      - name: Success Status
         if: success()
         run: |
           echo "Deployment Successful" >> $GITHUB_STEP_SUMMARY
 
-      - name: Deployment Failed
+      - name: Failure Status
         if: failure()
         run: |
           echo "Deployment Failed - Rollback Executed" >> $GITHUB_STEP_SUMMARY
